@@ -45,17 +45,19 @@ def generate_schedules():
             continue
         for doctor in doctors:
             for location in locations:
-                # Working hours from 9 AM to 5 PM
-                for hour in range(9, 17):
-                    # Assume some slots are already booked
-                    if random.choice([True, False]):
-                        all_schedules.append({
-                            "date": date.strftime('%Y-%m-%d'),
-                            "time": f"{hour:02d}:00",
-                            "doctor": doctor,
-                            "location": location,
-                            "is_available": True
-                        })
+                # Working hours from 9 AM to 5 PM, 30-min slots
+                start_time = datetime.combine(date, datetime.min.time())
+                for slot in range(16):  # 9:00 to 17:00 in 30-min increments
+                    slot_time = (start_time + timedelta(minutes=30*slot)).strftime('%H:%M')
+                    # Randomly decide if this slot is available
+                    is_avail = random.choice([True, False])
+                    all_schedules.append({
+                        "date": date.strftime('%Y-%m-%d'),
+                        "time": slot_time,
+                        "doctor": doctor,
+                        "location": location,
+                        "is_available": is_avail
+                    })
 
     df = pd.DataFrame(all_schedules)
     df.to_excel("data/doctor_schedules.xlsx", index=False)

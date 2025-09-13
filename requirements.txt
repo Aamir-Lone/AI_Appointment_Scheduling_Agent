@@ -3,11 +3,9 @@ langchain
 langgraph
 langchain_community
 langchain_openai
-together
 streamlit
 python-dotenv
 pandas
 openpyxl
 Faker
 langchain_google_genai
-nest_asyncio

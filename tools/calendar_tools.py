@@ -1,9 +1,63 @@
+# Returns valid 60-min slots for new patients (pairs of consecutive available 30-min slots)
+def get_60min_slots(doctor: str, date: str) -> list[str]:
+    """
+    Returns valid 60-minute slots for new patients (pairs of consecutive available 30-min slots)
+    for a given doctor and date.
+    """
+    try:
+        df = pd.read_excel("data/doctor_schedules.xlsx")
+        df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
+        doctor_name_in_file = df['doctor'].str.replace('.', '').str.lower()
+        doctor_to_find = doctor.replace('.', '').lower()
+        is_available_mask = df['is_available'].astype(str).str.lower() == 'true'
+        slots = df[(doctor_name_in_file == doctor_to_find) & (df['date'] == date) & (is_available_mask)]
+        times = sorted(slots['time'].unique())
+        # Convert times to minutes for easy comparison
+        def time_to_minutes(t):
+            h, m = map(int, t.split(':'))
+            return h * 60 + m
+        valid_pairs = []
+        times_minutes = [time_to_minutes(t) for t in times]
+        for i in range(len(times_minutes)-1):
+            if times_minutes[i+1] - times_minutes[i] == 30:
+                valid_pairs.append(f"{times[i]} - {times[i+1]}")
+        return valid_pairs if valid_pairs else ["No 60-minute slots available for this doctor on this date."]
+    except Exception as e:
+        return [f"Error finding 60-min slots: {e}"]
+
+
+
 
 # tools/calendar_tools.py
 import pandas as pd
 from datetime import datetime, timedelta
 from tools.file_tools import export_to_excel
 from tools.communication_tools import send_confirmation_email, send_confirmation_sms
+
+
+def get_available_dates(doctor: str) -> dict:
+    """
+    Returns all available dates and time slots for a given doctor.
+    Output: {date1: [time1, time2, ...], date2: [...], ...}
+    """
+    try:
+        df = pd.read_excel("data/doctor_schedules.xlsx")
+        df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
+        doctor_name_in_file = df['doctor'].str.replace('.', '').str.lower()
+        doctor_to_find = doctor.replace('.', '').lower()
+        is_available_mask = df['is_available'].astype(str).str.lower() == 'true'
+
+        available = df[(doctor_name_in_file == doctor_to_find) & (is_available_mask)]
+        if available.empty:
+            return {"message": f"No available slots found for Dr. {doctor.title()} in the schedule."}
+
+        result = {}
+        for date in sorted(available['date'].unique()):
+            times = available[available['date'] == date]['time'].tolist()
+            result[date] = times
+        return result
+    except Exception as e:
+        return {"error": str(e)}
 
 def check_availability(doctor: str, date: str) -> list[str]:
     """
@@ -13,11 +67,8 @@ def check_availability(doctor: str, date: str) -> list[str]:
     try:
         df = pd.read_excel("data/doctor_schedules.xlsx")
         df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
-        
-        # --- MODIFIED: More robust cleaning of doctor names ---
-        doctor_name_in_file = df['doctor'].str.replace('.', '', regex=False).str.lower()
-        doctor_to_find = doctor.replace('.', '', regex=False).lower()
-
+        doctor_name_in_file = df['doctor'].str.replace('.', '').str.lower()
+        doctor_to_find = doctor.replace('.', '').lower()
         is_available_mask = df['is_available'].astype(str).str.lower() == 'true'
 
         available_slots = df[
@@ -33,7 +84,7 @@ def check_availability(doctor: str, date: str) -> list[str]:
     except Exception as e:
         return [f"An error occurred: {e}"]
 
-def book_appointment(patient_name: str, doctor: str, date: str, time: str, patient_status: str, insurance_carrier: str, insurance_id: str) -> str:
+def book_appointment(patient_name: str, doctor: str, date: str, time: str, patient_status: str, insurance_carrier: str, insurance_id: str, email: str = "", phone: str = "") -> str:
     """
     Books a patient's appointment after all information, including insurance, has been collected.
     Handles "Smart Scheduling": 60 minutes for new patients and 30 minutes for returning patients.
@@ -43,20 +94,18 @@ def book_appointment(patient_name: str, doctor: str, date: str, time: str, patie
     try:
         df = pd.read_excel("data/doctor_schedules.xlsx")
         df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
-        
-        # --- MODIFIED: More robust cleaning of doctor names ---
-        doctor_name_in_file = df['doctor'].str.replace('.', '', regex=False).str.lower()
-        doctor_to_find = doctor.replace('.', '', regex=False).lower()
+        doctor_name_in_file = df['doctor'].str.replace('.', '').str.lower()
+        doctor_to_find = doctor.replace('.', '').lower()
         is_available_mask = df['is_available'].astype(str).str.lower() == 'true'
-        
+
         if patient_status.lower() == 'new':
             start_time_obj = datetime.strptime(time, '%H:%M')
             end_time_obj = start_time_obj + timedelta(minutes=30)
             second_slot_time = end_time_obj.strftime('%H:%M')
-            
+
             slot1_mask = ((doctor_name_in_file == doctor_to_find) & (df['date'] == date) & (df['time'] == time) & (is_available_mask))
             slot2_mask = ((doctor_name_in_file == doctor_to_find) & (df['date'] == date) & (df['time'] == second_slot_time) & (is_available_mask))
-            
+
             slot1_index, slot2_index = df[slot1_mask].index, df[slot2_mask].index
 
             if slot1_index.empty or slot2_index.empty:
@@ -74,16 +123,17 @@ def book_appointment(patient_name: str, doctor: str, date: str, time: str, patie
             final_booking_time = time
 
         df.to_excel("data/doctor_schedules.xlsx", index=False)
-        
+
         appointment_details = {"patient_name": patient_name, "doctor": doctor, "date": date, "time": final_booking_time, "patient_status": patient_status, "insurance_carrier": insurance_carrier, "insurance_id": insurance_id}
         export_to_excel(appointment_details)
-        
-        patient_email = f"{patient_name.replace(' ', '.').lower()}@example.com"
-        patient_phone = "555-123-4567"
-        
+
+        # Use provided email/phone if available, else fallback
+        patient_email = email if email else f"{patient_name.replace(' ', '.').lower()}@example.com"
+        patient_phone = phone if phone else "555-123-4567"
+
         send_confirmation_email(patient_email=patient_email, details=str(appointment_details))
         send_confirmation_sms(patient_phone=patient_phone, details=str(appointment_details))
-        
+
         return f"Success! The appointment for {patient_name} for {final_booking_time} is confirmed, logged, and a confirmation email and SMS have been sent."
     except Exception as e:
         return f"An unexpected error occurred while booking: {e}"

@@ -1,4 +1,5 @@
 
+
 # tools/communication_tools.py
 
 def send_confirmation_email(patient_email: str, details: str) -> str:

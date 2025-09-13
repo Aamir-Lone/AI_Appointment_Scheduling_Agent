@@ -1,4 +1,7 @@
 
+
+
+
 # agent/state.py
 from typing import TypedDict, Annotated, List, Optional
 from langchain_core.messages import BaseMessage
@@ -14,4 +17,6 @@ class AgentState(TypedDict):
     time: Optional[str]
     insurance_carrier: Optional[str]
     insurance_id: Optional[str]
+    email: Optional[str]
+    phone: Optional[str]
 
