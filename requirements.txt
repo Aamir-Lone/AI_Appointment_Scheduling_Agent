@@ -9,3 +9,4 @@ pandas
 openpyxl
 Faker
 langchain_google_genai
+nest_asyncio

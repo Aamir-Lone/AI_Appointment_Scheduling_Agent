@@ -1,3 +1,11 @@
+# tools/calendar_tools.py
+import pandas as pd
+from datetime import datetime, timedelta
+from tools.file_tools import export_to_excel
+from tools.communication_tools import send_confirmation_email, send_confirmation_sms
+
+
+
 # Returns valid 60-min slots for new patients (pairs of consecutive available 30-min slots)
 def get_60min_slots(doctor: str, date: str) -> list[str]:
     """
@@ -28,11 +36,7 @@ def get_60min_slots(doctor: str, date: str) -> list[str]:
 
 
 
-# tools/calendar_tools.py
-import pandas as pd
-from datetime import datetime, timedelta
-from tools.file_tools import export_to_excel
-from tools.communication_tools import send_confirmation_email, send_confirmation_sms
+
 
 
 def get_available_dates(doctor: str) -> dict:
