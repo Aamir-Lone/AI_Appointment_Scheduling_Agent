@@ -1,143 +1,120 @@
-# tools/calendar_tools.py
 import pandas as pd
 from datetime import datetime, timedelta
-from tools.file_tools import export_to_excel
-from tools.communication_tools import send_confirmation_email, send_confirmation_sms
+from langchain_core.tools import tool
+import os
 
+# Helper to find consecutive slots for new patients
+def _find_consecutive_slots(times, count=2):
+    def time_to_minutes(t):
+        h, m = map(int, t.split(':'))
+        return h * 60 + m
+    
+    sorted_times = sorted(times)
+    valid_starts = []
+    for i in range(len(sorted_times) - count + 1):
+        is_consecutive = True
+        for j in range(count - 1):
+            if time_to_minutes(sorted_times[i+j+1]) - time_to_minutes(sorted_times[i+j]) != 30:
+                is_consecutive = False
+                break
+        if is_consecutive:
+            valid_starts.append(sorted_times[i])
+    return valid_starts
 
-
-# Returns valid 60-min slots for new patients (pairs of consecutive available 30-min slots)
-def get_60min_slots(doctor: str, date: str) -> list[str]:
-    """
-    Returns valid 60-minute slots for new patients (pairs of consecutive available 30-min slots)
-    for a given doctor and date.
-    """
+@tool
+def get_doctor_list() -> list:
+    """Returns a list of all unique doctor names available in the schedule."""
     try:
         df = pd.read_excel("data/doctor_schedules.xlsx")
-        df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
-        doctor_name_in_file = df['doctor'].str.replace('.', '').str.lower()
-        doctor_to_find = doctor.replace('.', '').lower()
-        is_available_mask = df['is_available'].astype(str).str.lower() == 'true'
-        slots = df[(doctor_name_in_file == doctor_to_find) & (df['date'] == date) & (is_available_mask)]
-        times = sorted(slots['time'].unique())
-        # Convert times to minutes for easy comparison
-        def time_to_minutes(t):
-            h, m = map(int, t.split(':'))
-            return h * 60 + m
-        valid_pairs = []
-        times_minutes = [time_to_minutes(t) for t in times]
-        for i in range(len(times_minutes)-1):
-            if times_minutes[i+1] - times_minutes[i] == 30:
-                valid_pairs.append(f"{times[i]} - {times[i+1]}")
-        return valid_pairs if valid_pairs else ["No 60-minute slots available for this doctor on this date."]
+        return df['doctor'].unique().tolist()
     except Exception as e:
-        return [f"Error finding 60-min slots: {e}"]
+        return [f"Error: {str(e)}"]
 
-
-
-
-
-
-
-def get_available_dates(doctor: str) -> dict:
+@tool
+def check_availability(doctor: str, date: str, patient_status: str) -> list:
     """
-    Returns all available dates and time slots for a given doctor.
-    Output: {date1: [time1, time2, ...], date2: [...], ...}
+    Checks for available time slots for a doctor on a specific date.
+    patient_status: 'new' (needs 60 mins) or 'returning' (needs 30 mins).
+    date format: 'YYYY-MM-DD'.
     """
     try:
         df = pd.read_excel("data/doctor_schedules.xlsx")
         df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
-        doctor_name_in_file = df['doctor'].str.replace('.', '').str.lower()
-        doctor_to_find = doctor.replace('.', '').lower()
-        is_available_mask = df['is_available'].astype(str).str.lower() == 'true'
-
-        available = df[(doctor_name_in_file == doctor_to_find) & (is_available_mask)]
-        if available.empty:
-            return {"message": f"No available slots found for Dr. {doctor.title()} in the schedule."}
-
-        result = {}
-        for date in sorted(available['date'].unique()):
-            times = available[available['date'] == date]['time'].tolist()
-            result[date] = times
-        return result
-    except Exception as e:
-        return {"error": str(e)}
-
-def check_availability(doctor: str, date: str) -> list[str]:
-    """
-    Checks the doctor's schedule for a specific date to find available time slots.
-    The date MUST be in 'YYYY-MM-DD' format. For example, September 8th, 2025 is '2025-09-08'.
-    """
-    try:
-        df = pd.read_excel("data/doctor_schedules.xlsx")
-        df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
-        doctor_name_in_file = df['doctor'].str.replace('.', '').str.lower()
-        doctor_to_find = doctor.replace('.', '').lower()
-        is_available_mask = df['is_available'].astype(str).str.lower() == 'true'
-
-        available_slots = df[
-            (doctor_name_in_file == doctor_to_find) &
+        
+        # Filter for doctor, date, and availability
+        available_df = df[
+            (df['doctor'].str.lower() == doctor.lower()) & 
             (df['date'] == date) & 
-            (is_available_mask)
+            (df['is_available'] == True)
         ]
         
-        if available_slots.empty:
-            return [f"No available slots found for Dr. {doctor.title()} on this day."]
+        times = available_df['time'].tolist()
+        
+        if patient_status.lower() == 'new':
+            # New patients need 60 mins = 2 consecutive 30-min slots
+            valid_starts = _find_consecutive_slots(times, count=2)
+            if not valid_starts:
+                return ["No 60-minute slots available for new patients on this date."]
+            return [f"{t} (60 min)" for t in valid_starts]
+        else:
+            # Returning patients need 30 mins = 1 slot
+            if not times:
+                return [f"No availability for Dr. {doctor} on {date}."]
+            return times
             
-        return available_slots['time'].tolist()
     except Exception as e:
-        return [f"An error occurred: {e}"]
+        return [f"Error checking availability: {str(e)}"]
 
-def book_appointment(patient_name: str, doctor: str, date: str, time: str, patient_status: str, insurance_carrier: str, insurance_id: str, email: str = "", phone: str = "") -> str:
+@tool
+def book_appointment(patient_name: str, doctor: str, date: str, time: str, patient_status: str) -> str:
     """
-    Books a patient's appointment after all information, including insurance, has been collected.
-    Handles "Smart Scheduling": 60 minutes for new patients and 30 minutes for returning patients.
-    Upon success, it automatically logs the appointment and sends a confirmation email and SMS.
-    You MUST collect the patient's status ('new' or 'returning') and insurance details before calling this tool.
+    Books an appointment. 
+    New patients (60 mins) occupy two slots. Returning patients (30 mins) occupy one.
     """
     try:
         df = pd.read_excel("data/doctor_schedules.xlsx")
         df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
-        doctor_name_in_file = df['doctor'].str.replace('.', '').str.lower()
-        doctor_to_find = doctor.replace('.', '').lower()
-        is_available_mask = df['is_available'].astype(str).str.lower() == 'true'
-
+        
+        doctor_lower = doctor.lower()
+        
         if patient_status.lower() == 'new':
-            start_time_obj = datetime.strptime(time, '%H:%M')
-            end_time_obj = start_time_obj + timedelta(minutes=30)
-            second_slot_time = end_time_obj.strftime('%H:%M')
-
-            slot1_mask = ((doctor_name_in_file == doctor_to_find) & (df['date'] == date) & (df['time'] == time) & (is_available_mask))
-            slot2_mask = ((doctor_name_in_file == doctor_to_find) & (df['date'] == date) & (df['time'] == second_slot_time) & (is_available_mask))
-
-            slot1_index, slot2_index = df[slot1_mask].index, df[slot2_mask].index
-
-            if slot1_index.empty or slot2_index.empty:
-                return f"Sorry, a 60-minute appointment starting at {time} is not available. Please try another time."
-
-            df.loc[slot1_index, ['is_available', 'patient_name']] = [False, patient_name]
-            df.loc[slot2_index, ['is_available', 'patient_name']] = [False, patient_name]
-            final_booking_time = f"{time} - {end_time_obj.strftime('%H:%M')}"
-
-        else: # Returning patients
-            mask = ((doctor_name_in_file == doctor_to_find) & (df['date'] == date) & (df['time'] == time) & (is_available_mask))
+            # Find the two slots
+            start_dt = datetime.strptime(time, "%H:%M")
+            second_slot_time = (start_dt + timedelta(minutes=30)).strftime("%H:%M")
+            
+            mask1 = (df['doctor'].str.lower() == doctor_lower) & (df['date'] == date) & (df['time'] == time) & (df['is_available'] == True)
+            mask2 = (df['doctor'].str.lower() == doctor_lower) & (df['date'] == date) & (df['time'] == second_slot_time) & (df['is_available'] == True)
+            
+            if df[mask1].empty or df[mask2].empty:
+                return "Error: One or both of the required slots are no longer available."
+            
+            df.loc[mask1, 'is_available'] = False
+            df.loc[mask1, 'patient_name'] = patient_name
+            df.loc[mask2, 'is_available'] = False
+            df.loc[mask2, 'patient_name'] = patient_name
+            booking_display = f"{time} - {(start_dt + timedelta(minutes=60)).strftime('%H:%M')}"
+        else:
+            mask = (df['doctor'].str.lower() == doctor_lower) & (df['date'] == date) & (df['time'] == time) & (df['is_available'] == True)
             if df[mask].empty:
-                return f"Sorry, the slot at {time} is no longer available. Please check the availability again."
-            df.loc[mask, ['is_available', 'patient_name']] = [False, patient_name]
-            final_booking_time = time
+                return "Error: This slot is no longer available."
+            
+            df.loc[mask, 'is_available'] = False
+            df.loc[mask, 'patient_name'] = patient_name
+            booking_display = time
 
         df.to_excel("data/doctor_schedules.xlsx", index=False)
+        
+        # Log to appointment_log too
+        from tools.file_tools import export_to_excel
+        export_to_excel({
+            "patient_name": patient_name,
+            "doctor": doctor,
+            "date": date,
+            "time": booking_display,
+            "status": patient_status
+        })
 
-        appointment_details = {"patient_name": patient_name, "doctor": doctor, "date": date, "time": final_booking_time, "patient_status": patient_status, "insurance_carrier": insurance_carrier, "insurance_id": insurance_id}
-        export_to_excel(appointment_details)
-
-        # Use provided email/phone if available, else fallback
-        patient_email = email if email else f"{patient_name.replace(' ', '.').lower()}@example.com"
-        patient_phone = phone if phone else "555-123-4567"
-
-        send_confirmation_email(patient_email=patient_email, details=str(appointment_details))
-        send_confirmation_sms(patient_phone=patient_phone, details=str(appointment_details))
-
-        return f"Success! The appointment for {patient_name} for {final_booking_time} is confirmed, logged, and a confirmation email and SMS have been sent."
+        return f"Successfully booked {patient_status} appointment for {patient_name} with Dr. {doctor} on {date} at {booking_display}."
+        
     except Exception as e:
-        return f"An unexpected error occurred while booking: {e}"
+        return f"Error booking appointment: {str(e)}"

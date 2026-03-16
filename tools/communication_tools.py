@@ -1,7 +1,7 @@
 
+from langchain_core.tools import tool
 
-# tools/communication_tools.py
-
+@tool
 def send_confirmation_email(patient_email: str, details: str) -> str:
     """
     Simulates sending a confirmation and intake form email to the patient.
@@ -16,6 +16,7 @@ def send_confirmation_email(patient_email: str, details: str) -> str:
     print(f"--- END EMAIL SIMULATION ---\n")
     return "Confirmation email has been sent successfully."
 
+@tool
 def send_confirmation_sms(patient_phone: str, details: str) -> str:
     """
     Simulates sending an SMS confirmation to the patient's phone.
